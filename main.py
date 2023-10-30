@@ -38,12 +38,12 @@ def split_into_chunks(
 @serve.deployment(
     route_prefix="/",
     ray_actor_options={"num_cpus": 1, "num_gpus": 1},
-    autoscaling_config={
-        "target_num_ongoing_requests_per_replica": 5,
-        "min_replicas": 0,
-        "initial_replicas": 0,
-        "max_replicas": 200,
-    },
+    # autoscaling_config={
+    #     "target_num_ongoing_requests_per_replica": 5,
+    #     "min_replicas": 0,
+    #     "initial_replicas": 0,
+    #     "max_replicas": 200,
+    # },
 )
 @serve.ingress(app)
 class Summarizer:
