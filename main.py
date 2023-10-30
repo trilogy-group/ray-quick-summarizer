@@ -15,10 +15,6 @@ MODEL_NAME = "pszemraj/led-large-book-summary"
 app = FastAPI()
 
 
-class SummaryRequest(BaseModel):
-    text: str
-
-
 def count_tokens(text: str) -> int:
     encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
     tokens = len(encoding.encode(text))
@@ -40,6 +36,7 @@ def split_into_chunks(
 
 # TODO: Find ideal cpu and gpu config
 @serve.deployment(
+    route_prefix="/",
     ray_actor_options={"num_cpus": 1, "num_gpus": 1},
     autoscaling_config={
         "target_num_ongoing_requests_per_replica": 5,
@@ -57,7 +54,7 @@ class Summarizer:
         print("Loading model")
         self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
 
-    @app.get("/summarize")
+    @app.get("/")
     def summarize(self, text: str) -> str:
         print("Starting summary")
         with torch.inference_mode():
