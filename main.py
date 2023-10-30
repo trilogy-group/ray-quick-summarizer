@@ -57,13 +57,13 @@ class Summarizer:
         print("Loading model")
         self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
 
-    @app.post("/summarize")
-    def summarize(self, request: SummaryRequest) -> str:
+    @app.get("/summarize")
+    def summarize(self, text: str) -> str:
         print("Starting summary")
-        text = request.text
         with torch.inference_mode():
             start = perf_counter()
             chunks = split_into_chunks(text)
+            print(f"Received {chunks=}")
             input_ids = self.tokenizer(
                 chunks, padding=True, truncation=True, return_tensors="pt"
             ).input_ids
