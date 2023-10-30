@@ -1,15 +1,22 @@
 from time import perf_counter
 from typing import List
 
+from fastapi import FastAPI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from pydantic import BaseModel
 from ray import serve
-from starlette.requests import Request
 import tiktoken
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 
 MODEL_NAME = "pszemraj/led-large-book-summary"
+
+app = FastAPI()
+
+
+class SummaryRequest(BaseModel):
+    text: str
 
 
 def count_tokens(text: str) -> int:
@@ -41,6 +48,7 @@ def split_into_chunks(
         "max_replicas": 200,
     },
 )
+@serve.ingress(app)
 class Summarizer:
     def __init__(self):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -49,8 +57,10 @@ class Summarizer:
         print("Loading model")
         self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
 
-    def summarize(self, text: str) -> str:
+    @app.post("/summarize")
+    def summarize(self, request: SummaryRequest) -> str:
         print("Starting summary")
+        text = request.text
         with torch.inference_mode():
             start = perf_counter()
             chunks = split_into_chunks(text)
@@ -68,10 +78,6 @@ class Summarizer:
             end = perf_counter()
             print(f"Summarized {len(chunks)} chunks in {end-start:0.2f}s")
             return summary
-
-    async def __call__(self, http_request: Request) -> str:
-        text: str = (await http_request.json())["text"]
-        return self.summarize(text)
 
 
 summarizer_app = Summarizer.bind()
