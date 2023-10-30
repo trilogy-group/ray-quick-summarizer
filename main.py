@@ -36,7 +36,6 @@ def split_into_chunks(
 
 # TODO: Find ideal cpu and gpu config
 @serve.deployment(
-    route_prefix="/",
     ray_actor_options={"num_cpus": 1, "num_gpus": 1},
     # autoscaling_config={
     #     "target_num_ongoing_requests_per_replica": 5,
