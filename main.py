@@ -1,79 +1,58 @@
-from time import perf_counter
-from typing import List
-
 from fastapi import FastAPI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from pydantic import BaseModel
 from ray import serve
-import tiktoken
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-
-MODEL_NAME = "pszemraj/led-large-book-summary"
-
+# 1: Define a FastAPI app and wrap it in a deployment with a route handler.
 app = FastAPI()
 
 
-def count_tokens(text: str) -> int:
-    encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
-    tokens = len(encoding.encode(text))
-    return tokens
-
-
-def split_into_chunks(
-    text: str, chunk_size: int = 512, chunk_overlap: int = 2
-) -> List[str]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        length_function=count_tokens,
-        separators=["\n\n", "\n", " ", ""],
-        chunk_overlap=chunk_overlap,
-    )
-    chunks = splitter.split_text(text)
-    return chunks
-
-
-# TODO: Find ideal cpu and gpu config
 @serve.deployment(
-    ray_actor_options={"num_cpus": 1, "num_gpus": 1},
-    # autoscaling_config={
-    #     "target_num_ongoing_requests_per_replica": 5,
-    #     "min_replicas": 0,
-    #     "initial_replicas": 0,
-    #     "max_replicas": 200,
-    # },
+    route_prefix="/",
+    ray_actor_options={"num_gpus": 1},
 )
 @serve.ingress(app)
-class Summarizer:
+class SummaryDeployment:
+    # FastAPI will automatically parse the HTTP request for us.
     def __init__(self):
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {self.device}")
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        print("Loading model")
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
+        from transformers import BartForConditionalGeneration, BartTokenizer
 
-    @app.get("/")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        model_name = "facebook/bart-large-cnn"
+        self.tokenizer = BartTokenizer.from_pretrained(model_name)
+        self.model = BartForConditionalGeneration.from_pretrained(model_name).to(
+            self.device
+        )
+
+    # Reference: https://github.com/amaiya/ktrain/blob/master/ktrain/text/summarization/core.py
+    @app.get("/summarize")
     def summarize(self, text: str) -> str:
-        print("Starting summary")
-        with torch.inference_mode():
-            start = perf_counter()
-            chunks = split_into_chunks(text)
-            print(f"Received {chunks=}")
-            input_ids = self.tokenizer(
-                chunks, padding=True, truncation=True, return_tensors="pt"
-            ).input_ids
-            outputs = self.model.generate(
-                input_ids.to(self.device),
-                min_length=0,
-                max_new_tokens=sum(map(len, input_ids)),
+        max_length = 50
+        min_length = 10
+        no_repeat_ngram_size = 3
+        length_penalty = 2.0
+        num_beams = 4
+
+        with torch.no_grad():
+            answers_input_ids = self.tokenizer.batch_encode_plus(
+                [text],
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_length,
+                min_length=min_length,
+            )["input_ids"].to(self.device)
+            summary_ids = self.model.generate(
+                answers_input_ids,
+                num_beams=num_beams,
+                length_penalty=length_penalty,
+                max_length=max_length,
+                min_length=min_length,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
-            summary = "".join(
-                self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+            exec_sum = self.tokenizer.decode(
+                summary_ids.squeeze(), skip_special_tokens=True
             )
-            end = perf_counter()
-            print(f"Summarized {len(chunks)} chunks in {end-start:0.2f}s")
-            return summary
+        return exec_sum
 
 
-summarizer_app = Summarizer.bind()
+deployment = SummaryDeployment.bind()
