@@ -1,10 +1,8 @@
 from time import perf_counter
 from typing import List
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from ray import serve
 from starlette.requests import Request
-import tiktoken
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -12,23 +10,93 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 MODEL_NAME = "pszemraj/led-large-book-summary"
 
 
-def count_tokens(text: str) -> int:
-    encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
-    tokens = len(encoding.encode(text))
-    return tokens
+def count_tokens(text: str, tokenizer) -> int:
+    tokens = tokenizer(text, truncation=False)["input_ids"]
+    return len(tokens)
 
 
-def split_into_chunks(
-    text: str, chunk_size: int = 512, chunk_overlap: int = 2
-) -> List[str]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        length_function=count_tokens,
-        separators=["\n\n", "\n", " ", ""],
-        chunk_overlap=chunk_overlap,
-    )
-    chunks = splitter.split_text(text)
+def split_with_separator(text: str, separator: str) -> List[str]:
+    chunks = text.split(separator)
+    for i in range(len(chunks) - 1):
+        chunks[i] += separator
     return chunks
+
+
+def merge_splits(
+    splits: List[str], chunk_size: int, overlap: int, tokenizer
+) -> List[str]:
+    # We now want to combine these smaller pieces into medium size
+    # chunks to send to the LLM.
+
+    docs = []
+    current_doc: List[str] = []
+    total = 0
+    for d in splits:
+        length = count_tokens(d, tokenizer)
+        if total + length > chunk_size:
+            if total > chunk_size:
+                print(
+                    f"Created a chunk of size {total}, "
+                    f"which is longer than the specified {chunk_size}"
+                )
+            if len(current_doc) > 0:
+                doc = "".join(current_doc)
+                if doc:
+                    docs.append(doc)
+                # Keep on popping if:
+                # - we have a larger chunk than in the chunk overlap
+                # - or if we still have any chunks and the length is long
+                while total > overlap or (total + length > chunk_size and total > 0):
+                    total -= count_tokens(current_doc[0], tokenizer)
+                    current_doc = current_doc[1:]
+        current_doc.append(d)
+        total += length
+    doc = "".join(current_doc)
+    if doc:
+        docs.append(doc)
+    return docs
+
+
+def split_text(
+    text: str,
+    tokenizer,
+    separators: List[str] = ["\n\n", "\n", " ", ""],
+    chunk_size: int = 512,
+    overlap: int = 2,
+):
+    final_chunks = []
+    # Get appropriate separator to use
+    separator = separators[-1]
+    new_separators = []
+    for i, sep in enumerate(separators):
+        if sep == "":
+            separator = sep
+            break
+        if sep in text:
+            separator = sep
+            new_separators = separators[i + 1 :]
+            break
+    splits = split_with_separator(text, separator)
+
+    # Now go merging things, recursively splitting longer texts.
+    good_splits = []
+    for s in splits:
+        if count_tokens(s, tokenizer) < chunk_size:
+            good_splits.append(s)
+        else:
+            if good_splits:
+                merged_text = merge_splits(good_splits, chunk_size, overlap, tokenizer)
+                final_chunks.extend(merged_text)
+                good_splits = []
+            if not new_separators:
+                final_chunks.append(s)
+            else:
+                other_info = split_text(s, new_separators)
+                final_chunks.extend(other_info)
+    if good_splits:
+        merged_text = merge_splits(good_splits, chunk_size, overlap, tokenizer)
+        final_chunks.extend(merged_text)
+    return final_chunks
 
 
 # TODO: Find ideal cpu and gpu config
@@ -53,7 +121,7 @@ class Summarizer:
         print("Starting summary")
         with torch.inference_mode():
             start = perf_counter()
-            chunks = split_into_chunks(text)
+            chunks = split_text(text, self.tokenizer)
             input_ids = self.tokenizer(
                 chunks, padding=True, truncation=True, return_tensors="pt"
             ).input_ids
