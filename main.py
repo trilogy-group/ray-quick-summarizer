@@ -1,3 +1,4 @@
+import re
 from time import perf_counter
 from typing import List
 
@@ -16,7 +17,7 @@ def count_tokens(text: str, tokenizer) -> int:
 
 
 def split_with_separator(text: str, separator: str) -> List[str]:
-    chunks = text.split(separator)
+    chunks = re.split(separator, text)
     for i in range(len(chunks) - 1):
         chunks[i] += separator
     return chunks
