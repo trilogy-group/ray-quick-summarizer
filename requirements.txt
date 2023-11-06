@@ -1,4 +1,4 @@
-langchain==0.0.324
+langchain==0.0.325
 tiktoken==0.5.1
 torch==2.1.0
 transformers==4.34.1
