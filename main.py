@@ -12,8 +12,10 @@ MODEL_NAME = "pszemraj/led-large-book-summary"
 
 
 def count_tokens(text: str, tokenizer) -> int:
-    tokens = tokenizer(text, truncation=False)["input_ids"]
-    return len(tokens)
+    inputs = tokenizer(
+        text, padding=True, truncation=True, return_tensors="pt"
+    ).input_ids
+    return inputs.size(1) - tokenizer.num_special_tokens_to_add()
 
 
 def split_with_separator(text: str, separator: str) -> List[str]:
@@ -118,29 +120,34 @@ class Summarizer:
         print("Loading model")
         self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
 
-    def summarize(self, text: str) -> str:
+    def summarize(self, text: str, chunk_size: int) -> str:
         print("Starting summary")
+        start = perf_counter()
         with torch.inference_mode():
-            start = perf_counter()
-            chunks = split_text(text, self.tokenizer)
-            input_ids = self.tokenizer(
-                chunks, padding=True, truncation=True, return_tensors="pt"
-            ).input_ids
-            outputs = self.model.generate(
-                input_ids.to(self.device),
-                min_length=0,
-                max_new_tokens=sum(map(len, input_ids)),
-            )
-            summary = "".join(
-                self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            )
+            input_length = count_tokens(text, self.tokenizer)
+            chunks = split_text(text, tokenizer=self.tokenizer, chunk_size=chunk_size)
+            summary = ""
+            for chunk in chunks:
+                inputs = self.tokenizer(
+                    chunk, padding=True, truncation=True, return_tensors="pt"
+                ).input_ids
+                input_size = inputs.size(1)
+
+                outputs = self.model.generate(
+                    inputs.to(self.device), min_length=0, length_penalty=0, max_new_tokens=input_size+1
+                )
+                summary += "".join(self.tokenizer.decode(outputs[0], skip_special_tokens=True))
+                
             end = perf_counter()
+            summary_length = count_tokens(summary, self.tokenizer)
             print(f"Summarized {len(chunks)} chunks in {end-start:0.2f}s")
             return summary
 
     async def __call__(self, http_request: Request) -> str:
-        text: str = (await http_request.json())["text"]
-        return self.summarize(text)
+        request = await http_request.json()
+        text: str = request["text"]
+        chunk_size: int = request.get("chunk_size", 512)
+        return self.summarize(text, chunk_size)
 
 
 summarizer_app = Summarizer.bind()
