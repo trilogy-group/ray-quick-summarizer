@@ -1,7 +1,9 @@
 import re
 from time import perf_counter
 from typing import List
+from pydantic import BaseModel
 
+from fastapi import FastAPI
 from ray import serve
 from starlette.requests import Request
 import torch
@@ -9,7 +11,15 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 
 MODEL_NAME = "pszemraj/led-large-book-summary"
+app = FastAPI()
 
+class SummaryRequest(BaseModel):
+    text: str
+    chunk_size: int = 512
+
+class SummaryResponse(BaseModel):
+    summary: str
+    latency: float
 
 def count_tokens(text: str, tokenizer) -> int:
     inputs = tokenizer(
@@ -112,6 +122,7 @@ def split_text(
         "max_replicas": 200,
     },
 )
+@serve.ingress(app)
 class Summarizer:
     def __init__(self):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -120,8 +131,15 @@ class Summarizer:
         print("Loading model")
         self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
 
-    def summarize(self, text: str, chunk_size: int) -> str:
+    @app.get("/ping")
+    def ping(self) -> str:
+        return "pong"
+
+    @app.post("/summarize")
+    def summarize(self, summary_request: SummaryRequest) -> SummaryResponse:
         print("Starting summary")
+        text = summary_request.text
+        chunk_size = summary_request.chunk_size
         start = perf_counter()
         with torch.inference_mode():
             input_length = count_tokens(text, self.tokenizer)
@@ -140,14 +158,8 @@ class Summarizer:
                 
             end = perf_counter()
             summary_length = count_tokens(summary, self.tokenizer)
-            print(f"Summarized {len(chunks)} chunks in {end-start:0.2f}s")
-            return summary
-
-    async def __call__(self, http_request: Request) -> str:
-        request = await http_request.json()
-        text: str = request["text"]
-        chunk_size: int = request.get("chunk_size", 512)
-        return self.summarize(text, chunk_size)
+            print(f"Summarized {len(chunks)} chunks from {input_length} to {summary_length} tokens in {end-start:0.2f}s")
+            return SummaryResponse(summary=summary, latency=end-start)
 
 
 summarizer_app = Summarizer.bind()
