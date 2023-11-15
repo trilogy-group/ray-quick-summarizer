@@ -94,7 +94,13 @@ def split_text(
             if not new_separators:
                 final_chunks.append(s)
             else:
-                other_info = split_text(s, new_separators)
+                other_info = split_text(
+                    s,
+                    tokenizer=tokenizer,
+                    separators=new_separators,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                )
                 final_chunks.extend(other_info)
     if good_splits:
         merged_text = merge_splits(good_splits, chunk_size, overlap, tokenizer)
