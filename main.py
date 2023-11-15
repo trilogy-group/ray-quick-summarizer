@@ -2,13 +2,13 @@ import re
 from time import perf_counter
 from typing import List
 
+import torch
 from ray import serve
 from starlette.requests import Request
-import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-
 MODEL_NAME = "pszemraj/led-large-book-summary"
+CACHE_DIR = "/home/model_weights"
 
 
 def count_tokens(text: str, tokenizer) -> int:
@@ -116,9 +116,19 @@ class Summarizer:
     def __init__(self):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        start = perf_counter()
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            CACHE_DIR, cache_dir=CACHE_DIR, local_files_only=True
+        )
+        end = perf_counter()
+        print(f"Loaded tokenizer in {end-start:0.2f}s")
         print("Loading model")
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(self.device)
+        start = perf_counter()
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            CACHE_DIR, cache_dir=CACHE_DIR, local_files_only=True
+        ).to(self.device)
+        end = perf_counter()
+        print(f"Loaded model in {end-start:0.2f}s")
 
     def summarize(self, text: str, chunk_size: int) -> str:
         print("Starting summary")
@@ -134,13 +144,20 @@ class Summarizer:
                 input_size = inputs.size(1)
 
                 outputs = self.model.generate(
-                    inputs.to(self.device), min_length=0, length_penalty=0, max_new_tokens=input_size+1
+                    inputs.to(self.device),
+                    min_length=0,
+                    length_penalty=0,
+                    max_new_tokens=input_size + 1,
                 )
-                summary += "".join(self.tokenizer.decode(outputs[0], skip_special_tokens=True))
-                
+                summary += "".join(
+                    self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                )
+
             end = perf_counter()
             summary_length = count_tokens(summary, self.tokenizer)
-            print(f"Summarized {len(chunks)} chunks in {end-start:0.2f}s")
+            print(
+                f"Summarized {len(chunks)} chunks from {input_length} to {summary_length} in {end-start:0.2f}s"
+            )
             return summary
 
     async def __call__(self, http_request: Request) -> str:
