@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from time import perf_counter
 from typing import List
 
@@ -137,7 +138,7 @@ class Summarizer:
         print(f"Loaded model in {end-start:0.2f}s")
 
     def summarize(self, text: str, chunk_size: int) -> str:
-        print("Starting summary")
+        print(f"Starting summary at {datetime.now().strftime('%H:%M:%S')}")
         start = perf_counter()
         with torch.inference_mode():
             input_length = count_tokens(text, self.tokenizer)
@@ -164,9 +165,11 @@ class Summarizer:
             print(
                 f"Summarized {len(chunks)} chunks from {input_length} to {summary_length} in {end-start:0.2f}s"
             )
+            print(f"Finished summary at {datetime.now().strftime('%H:%M:%S')}")
             return summary
 
     async def __call__(self, http_request: Request) -> str:
+        print(f"Received request at {datetime.now().strftime('%H:%M:%S')}")
         request = await http_request.json()
         text: str = request["text"]
         chunk_size: int = request.get("chunk_size", 512)
